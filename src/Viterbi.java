@@ -1,126 +1,215 @@
-package edu.nyu.cs.pos;
-
-import edu.nyu.cs.pub.Constant;
-import edu.nyu.cs.pub.Decoder;
-import edu.nyu.cs.pub.Matrix;
-import edu.nyu.cs.pub.Sentence;
-import edu.nyu.cs.pub.Token;
-
 /**
- * Viterbi algorithm {@link http://en.wikipedia.org/wiki/Viterbi_algorithm} to
- * decode Hidden Markov Model<br/>
+ * Fancy Viterbi HMM Forward/Backward Processor
  *
- * @author Daniel Wu
+ * @author sagiemao
+ * @author gittitda
+ *
  */
-public class Viterbi implements Decoder {
+import java.util.ArrayList;
+import java.util.Hashtable;
 
-	// prior probability matrix
-	private Matrix priorMatrix = null;
+public class Viterbi {
 
-	// likelihood matrix
-	private Matrix likelihoodMatrix = null;
-
-	public Viterbi(Matrix priorMatrix, Matrix likelihoodMatrix) {
-		this.priorMatrix = priorMatrix;
-		this.likelihoodMatrix = likelihoodMatrix;
+	/**
+	 * Returns argmax of an array of floats,
+	 * argmax being the index of the maximum value.
+	 * @param arr An array of float values
+	 * @return index of maximum value
+	 */
+	private static Integer argmax(Float[] arr) {
+		Float max = arr[0];
+		Integer argmax = 0;
+		for (int i=1; i<arr.length; i++) {
+			if (arr[i] > max) {
+				max = arr[i];
+				argmax = i;
+			}
+		}
+		return argmax;
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see edu.nyu.cs.pub.Decoder#decode(edu.nyu.cs.pub.Sentence)
+	/**
+	 * Returns the most probable analyzing path for a word, given an HMM
+	 * @param word			Observation (word to analyze)
+	 * @param transitions	Hash table describing probability of each
+	 * 						HMM state to transition to the other states
+	 * @param outputs		Hash table describing probability of an output
+	 * 						character in each state
+	 * @return An array of state indexes passed in the most probably analyzing
 	 */
-	public Sentence decode(Sentence sentence) {
-		String[] states = priorMatrix.getKeys();
-		// observations
-		Token[] tokens = sentence.getTokens().toArray(new Token[0]);
-		int N = states.length;
-		int T = tokens.length;
-		double[][] viterbi = new double[N + 1][T + 1];
-		String[][] backtrack = new String[N + 1][T + 1];
-		// initialize first step
-		String firstWord = tokens[0].getLiteral();
-		for (int s = 0; s < N; s++) {
-			String state = states[s];
-			double v = 1.0;
-			// prior probability
-			double a = priorMatrix.getItem(Constant.START_SYMBOL, state);
-			// likelihood
-			double b = likelihoodMatrix.getItem(state, firstWord);
-			// max probability
-			double log = Math
-					.abs(Math.log10(v) + Math.log10(a) + Math.log10(b));
-			viterbi[s][0] = log;
-			backtrack[s][0] = "";
+	public static ArrayList<Integer> viterbiPath(String word,
+												 Hashtable<Integer, Hashtable<Integer, Float>> transitions,
+												 Hashtable<Integer, Hashtable<Character, Float>> outputs) {
+
+		int T = word.length(); // word length
+		int N = outputs.size(); // outputting states count (without q0, qF)
+		int F = N + 1; // final state index
+
+		// create a path probability table v : (N+2)xT
+		Float[][] v = new Float[N+2][T];
+		Integer[][] bp = new Integer[N+2][T];
+
+		// calculate first transition (first column in table)
+		for (int s=1; s<=N; s++) {
+			v[s][0] = transitions.get(0).get(s) * outputs.get(s).get(word.charAt(0));
+			bp[s][0] = 0;
 		}
 
-		// recursive step
-		for (int t = 1; t < T; t++) {
-			String word = tokens[t].getLiteral();
-			for (int s = 0; s < N; s++) {
-				double maxProb = Double.MAX_VALUE;
-				double argmax = Double.MAX_VALUE;
-				String backtrackArg = "";
-				String state = states[s];
-				for (int s1 = 0; s1 < N; s1++) {
-					double v = viterbi[s1][t - 1];
-					if (v == 0.0) {
-						continue;
+		// populate Viterbi table with max. probabilities
+		for (int t=1; t<T; t++) {
+			for (int s=1; s<=N; s++) {
+				Float[] probs = new Float[N];
+				for (int i=1; i<=N; i++) {
+					if (v[i][t-1] != null) {
+						probs[i-1] = v[i][t-1] *
+								transitions.get(i).get(s) *
+								outputs.get(s).get(word.charAt(t));
 					}
-					String previousState = states[s1];
-					// prior probability
-					double a = priorMatrix.getItem(previousState, state);
-					// likelihood
-					double b = likelihoodMatrix.getItem(state, word);
-					// max probability
-					double log = v + Math.abs(Math.log10(a));
-					if (log < argmax) {
-						argmax = log;
-						backtrackArg = previousState;
-					}
-					log = log + Math.abs(Math.log10(b));
-					if (log < maxProb) {
-						maxProb = log;
+					else {
+						probs[i-1] = 0f;
 					}
 				}
-				viterbi[s][t] = maxProb;
-				backtrack[s][t] = backtrackArg;
+				int argmax = argmax(probs);
+				bp[s][t] = argmax+1;
+				v[s][t] = probs[argmax];
 			}
 		}
 
-		// terminate step
-		viterbi[N][T] = Double.MAX_VALUE;
-		for (int s = 0; s < N; s++) {
-			String state = states[s];
-			// prior probability
-			double a = priorMatrix.getItem(state, Constant.END_SYMBOL);
-			// max probability
-			double likelihood = viterbi[s][T - 1] + Math.abs(Math.log10(a));
-			if (likelihood < viterbi[N][T]) {
-				viterbi[N][T] = likelihood;
-				backtrack[N][T] = state;
+		// calculate transition to final state
+		Float[] probs = new Float[N];
+		for (int i=1; i<=N; i++) {
+			if (v[i][T-1] != null) {
+				probs[i-1] = v[i][T-1] * transitions.get(i).get(F);
+			}
+			else {
+				probs[i-1] = 0f;
 			}
 		}
-		// backtracking
-		Sentence res = new Sentence();
-		int tagIndex = N;
-		int stepIndex = T;
-		String tag = backtrack[tagIndex][stepIndex];
-		while (tag != null && tag.length() != 0) {
-			// set tag
-			Token token = tokens[stepIndex - 1];
-			token.setTag(tag);
-			res.addToken(token);
-			for (int i = 0; i < states.length; i++) {
-				if (states[i].equals(tag)) {
-					tagIndex = i;
-					break;
+		int argmax = argmax(probs);
+		bp[F][T-1] = argmax+1;
+		v[F][T-1] = probs[argmax];
+
+		// return the backtrace path by following states from bp[F,T] backwards
+		ArrayList<Integer> path = new ArrayList<Integer>();
+		int q = F;
+		for (int i=T-1; i>=0; i--) {
+			q = bp[q][i];
+			path.add(0, q);
+		}
+
+		return path;
+	}
+
+	/**
+	 * Returns the total probability of an observation, given an HMM
+	 * @param word			Observation (word to analyze)
+	 * @param transitions	Hash table describing probability of each
+	 * 						HMM state to transition to the other states
+	 * @param outputs		Hash table describing probability of an output
+	 * 						character in each state
+	 * @return Total probability value of an observation
+	 */
+	public static Float viterbiForward(String word,
+									   Hashtable<Integer, Hashtable<Integer, Float>> transitions,
+									   Hashtable<Integer, Hashtable<Character, Float>> outputs) {
+
+		int T = word.length(); // word length
+		int N = outputs.size(); // outputting states count (without q0, qF)
+		int F = N + 1; // final state index
+
+		// create a path probability table v : (N+2)xT
+		Float[][] alpha = new Float[N+2][T];
+
+		// calculate first transition (first column in table)
+		for (int s=1; s<=N; s++) {
+			alpha[s][0] = transitions.get(0).get(s) * outputs.get(s).get(word.charAt(0));
+		}
+
+		// populate Viterbi table with total probabilities
+		for (int t=1; t<T; t++) {
+			for (int s=1; s<=N; s++) {
+				alpha[s][t] = 0f;
+				for (int i=1; i<=N; i++) {
+					if (alpha[i][t-1] != null) {
+						alpha[s][t]+= alpha[i][t-1] *
+								transitions.get(i).get(s) *
+								outputs.get(s).get(word.charAt(t));
+					}
 				}
 			}
-			tag = backtrack[tagIndex][--stepIndex];
 		}
 
-		return res;
+		// calculate transition to final state
+		alpha[F][T-1] = 0f;
+		for (int i=1; i<=N; i++) {
+			if (alpha[i][T-1] != null) {
+				alpha[F][T-1]+= alpha[i][T-1] * transitions.get(i).get(F);
+			}
+		}
+
+		// return final probability
+		return alpha[F][T-1];
+	}
+
+	/**
+	 * Defines the HMM we saw in class and prints the analyzing path
+	 * calculated by viterbiPath() for a given word.
+	 * @param args	Observations as a string (a word to analyze)
+	 */
+	public static void main(String[] args) {
+		// prepare transition probabilities table
+		Hashtable<Integer, Hashtable<Integer, Float>> transitions =
+				new Hashtable<Integer, Hashtable<Integer, Float>>();
+
+		// final state
+		int F = 3;
+
+		Hashtable<Integer, Float> q0 = new Hashtable<Integer, Float>();
+		q0.put(1, 0.7f);
+		q0.put(2, 0.3f);
+		Hashtable<Integer, Float> q1 = new Hashtable<Integer, Float>();
+		q1.put(1, 0.5f);
+		q1.put(2, 0.3f);
+		q1.put(F, 0.2f);
+		Hashtable<Integer, Float> q2 = new Hashtable<Integer, Float>();
+		q2.put(1, 0.4f);
+		q2.put(2, 0.5f);
+		q2.put(F, 0.1f);
+		transitions.put(0, q0);
+		transitions.put(1, q1);
+		transitions.put(2, q2);
+
+		// prepare outputs probabilities table
+		Hashtable<Integer, Hashtable<Character, Float>> outputs =
+				new Hashtable<Integer, Hashtable<Character, Float>>();
+		Hashtable<Character, Float> b1 = new Hashtable<Character, Float>();
+		b1.put('u', 0.5f);
+		b1.put('v', 0.5f);
+		Hashtable<Character, Float> b2 = new Hashtable<Character, Float>();
+		b2.put('u', 0.8f);
+		b2.put('v', 0.2f);
+		outputs.put(1, b1);
+		outputs.put(2, b2);
+
+		// validate input
+		if (args.length < 1) {
+			System.err.println("Error! Please pass a word to analyze as an argument.");
+		}
+		else if (args[0].matches("[uv]*[^uv]+[uv]*")) {
+			System.err.println("Error! The input word consists of characters not recognized by my HMM. Please use only: [u,v].");
+		}
+		else {
+			// calculate requested values
+			ArrayList<Integer> path = viterbiPath(args[0], transitions, outputs);
+			Float forward = viterbiForward(args[0], transitions, outputs);
+
+			System.out.println("Input for Viterbi analysis:");
+			System.out.println(args[0]);
+			System.out.println("\nViterbi optimal path:");
+			System.out.println(path);
+			System.out.println("\nViterbi forward probability:");
+			System.out.format("%.12f%n", forward);
+		}
 	}
 
 }
